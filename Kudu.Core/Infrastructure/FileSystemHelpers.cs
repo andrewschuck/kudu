@@ -253,6 +253,69 @@ namespace Kudu.Core.Infrastructure
             }
         }
 
+        // A helper method which takes a diff of the source and destination directory and copies/deletes those
+        // different files and directories to the destination directory. This ensures that any needless copying
+        // which would usually occur in CopyDirectoryRecursive doesn't happen since only the necessary files and
+        // directories are copied/deleted to/from the working directory
+        public static void CopyDirectoryFromFileSystemDiff(string sourceDirPath, string destinationDirPath, HashSet<FileSystemInfo> copyToWorkingDirectory, HashSet<FileSystemInfo> removeFromWorkingDirectory, bool overwrite = true)
+        {
+            if (!DirectoryExists(sourceDirPath))
+            {
+                throw new DirectoryNotFoundException(
+                    "Source directory does not exist or could not be found: "
+                    + sourceDirPath);
+            }
+
+            // If the destination directory doesn't exist, create it.
+            if (!DirectoryExists(destinationDirPath))
+            {
+                CreateDirectory(destinationDirPath);
+            }
+
+            // iterate over files/directories to copy from source to working directory
+            foreach (var entryToCopy in copyToWorkingDirectory)
+            {
+                // get any subdirectories which come before the file/directory name
+                string entryToCopySubDir = Path.GetDirectoryName(entryToCopy.FullName).Replace(sourceDirPath, "").TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                
+                string completeDestinationPath = Path.Combine(destinationDirPath, entryToCopySubDir, entryToCopy.Name);
+                bool entryIsDirectory = (entryToCopy.Attributes & FileAttributes.Directory) == FileAttributes.Directory;
+
+                // if the new entry is a directory, create the directory in the working directory
+                if (entryIsDirectory)
+                {
+                    EnsureDirectory(completeDestinationPath);
+                }
+                else
+                {
+                    // ensure that any subdirectories of the file exist in the working directory
+                    EnsureDirectory(Path.Combine(destinationDirPath, entryToCopySubDir));
+
+                    Instance.File.Copy(entryToCopy.FullName, completeDestinationPath, overwrite);
+                }
+            }
+
+            // iterate over files/directories to remove from working directory
+            foreach (var entryToRemove in removeFromWorkingDirectory)
+            {
+                // get any subdirectories which come before the file/directory name
+                string entryToRemoveSubDir = Path.GetDirectoryName(entryToRemove.FullName).Replace(sourceDirPath, "").TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                
+                string completeDestinationPath = Path.Combine(destinationDirPath, entryToRemoveSubDir, entryToRemove.Name);
+                bool entryIsDirectory = (entryToRemove.Attributes & FileAttributes.Directory) == FileAttributes.Directory;
+
+                // if the new entry is a directory, delete the directory in the working directory
+                if (entryIsDirectory)
+                {
+                    DeleteDirectorySafe(completeDestinationPath);
+                }
+                else
+                {
+                    DeleteFileSafe(completeDestinationPath);
+                }
+            }
+        }
+
         public static void SetLastWriteTimeUtc(string path, DateTime lastWriteTimeUtc)
         {
             Instance.File.SetLastWriteTimeUtc(path, lastWriteTimeUtc);

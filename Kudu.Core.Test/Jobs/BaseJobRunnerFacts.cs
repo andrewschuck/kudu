@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
+using System.IO.Abstractions;
 using Kudu.Core.Infrastructure;
 using Kudu.Core.Jobs;
 using Kudu.Core.Tracing;
@@ -21,24 +23,29 @@ namespace Kudu.Core.Test.Jobs
             _testJobWorkingDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "testjobworking");
             _mockLogger = new Mock<IJobLogger>(MockBehavior.Strict);
         }
-
+        
         [Fact]
         public void JobDirectoryHasChanged_NoChanges_CachedEntries_ReturnsFalse()
         {
             using (CreateTestJobDirectories())
             {
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                Assert.Equal(8, sourceDirectoryFileMap.Count);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
-                Assert.Equal(8, workingDirectoryFileMap.Count);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                Assert.Equal(9, sourceDirectoryFileMap.Count);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                Assert.Equal(9, workingDirectoryFileMap.Count);
                 var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
-                Assert.False(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                //_mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir' timestamp differs between source and working directories."));
+
+                Assert.False(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(0, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
         }
-
+        
         [Fact]
         public void JobDirectoryHasChanged_FileModifiedInSubDir_ReturnsTrue()
         {
@@ -47,13 +54,43 @@ namespace Kudu.Core.Test.Jobs
                 string testSubDir = Path.Combine(_testJobSourceDir, "subdir");
                 File.WriteAllText(Path.Combine(testSubDir, "test2.txt"), "update");
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
-                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
 
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                //_mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir' timestamp differs between source and working directories."));
                 _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test2.txt' timestamp differs between source and working directories."));
 
-                Assert.True(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(1, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+        
+        [Fact]
+        public void JobDirectoryHasChanged_MultipleFilesModifiedInSubDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                string testSubDir = Path.Combine(_testJobSourceDir, "subdir");
+                File.WriteAllText(Path.Combine(testSubDir, "test2.txt"), "update");
+                File.WriteAllText(Path.Combine(testSubDir, "test1.txt"), "update");
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test2.txt' timestamp differs between source and working directories."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test1.txt' timestamp differs between source and working directories."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(2, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
@@ -66,13 +103,40 @@ namespace Kudu.Core.Test.Jobs
             {
                 File.WriteAllText(Path.Combine(_testJobSourceDir, "test2.txt"), "update");
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
                 var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
                 _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' timestamp differs between source and working directories."));
 
-                Assert.True(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(1, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_MutipleFilesModifiedInRootDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                File.WriteAllText(Path.Combine(_testJobSourceDir, "test2.txt"), "update");
+                File.WriteAllText(Path.Combine(_testJobSourceDir, "test3.txt"), "update");
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' timestamp differs between source and working directories."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test3.txt' timestamp differs between source and working directories."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(2, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
@@ -85,13 +149,40 @@ namespace Kudu.Core.Test.Jobs
             {
                 File.WriteAllText(Path.Combine(_testJobSourceDir, "test4.txt"), "test");
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
                 var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
                 _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test4.txt' exists in source directory but not in working directory."));
 
-                Assert.True(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(1, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_MultipleFilesAddedInRootDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                File.WriteAllText(Path.Combine(_testJobSourceDir, "test4.txt"), "test");
+                File.WriteAllText(Path.Combine(_testJobSourceDir, "test5.txt"), "test");
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test4.txt' exists in source directory but not in working directory."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test5.txt' exists in source directory but not in working directory."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(2, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
@@ -104,13 +195,40 @@ namespace Kudu.Core.Test.Jobs
             {
                 File.Delete(Path.Combine(_testJobSourceDir, "test2.txt"));
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
                 var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
                 _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' has been deleted."));
 
-                Assert.True(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(0, copyToWorkingDirectory.Count);
+                Assert.Equal(1, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_MultipleFilesDeleted_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                File.Delete(Path.Combine(_testJobSourceDir, "test2.txt"));
+                File.Delete(Path.Combine(_testJobSourceDir, "test1.txt"));
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' has been deleted."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test1.txt' has been deleted."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(0, copyToWorkingDirectory.Count);
+                Assert.Equal(2, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
@@ -123,11 +241,14 @@ namespace Kudu.Core.Test.Jobs
             {
                 File.WriteAllText(Path.Combine(_testJobWorkingDir, "test4.txt"), "test");
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
                 var cachedDirectoryFileMap = sourceDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
-                Assert.False(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.False(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(0, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
@@ -140,13 +261,40 @@ namespace Kudu.Core.Test.Jobs
             {
                 File.WriteAllText(Path.Combine(_testJobWorkingDir, "test2.txt"), "test");
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
                 var cachedDirectoryFileMap = sourceDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
                 _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' timestamp differs between source and working directories."));
 
-                Assert.True(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(1, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_MultipleFilesModifiedInWorkingDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                File.WriteAllText(Path.Combine(_testJobWorkingDir, "test1.txt"), "test");
+                File.WriteAllText(Path.Combine(_testJobWorkingDir, "test3.txt"), "test");
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = sourceDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test1.txt' timestamp differs between source and working directories."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test3.txt' timestamp differs between source and working directories."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(2, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
@@ -159,13 +307,40 @@ namespace Kudu.Core.Test.Jobs
             {
                 File.Delete(Path.Combine(_testJobWorkingDir, "test2.txt"));
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
                 var cachedDirectoryFileMap = sourceDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
                 _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' exists in source directory but not in working directory."));
 
-                Assert.True(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(1, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_MultipleFilesDeletedInWorkingDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                File.Delete(Path.Combine(_testJobWorkingDir, "test2.txt"));
+                File.Delete(Path.Combine(_testJobWorkingDir, "test3.txt"));
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = sourceDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' exists in source directory but not in working directory."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test3.txt' exists in source directory but not in working directory."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(2, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }
@@ -179,11 +354,137 @@ namespace Kudu.Core.Test.Jobs
                 // create a case mismatch
                 File.Move(Path.Combine(_testJobWorkingDir, "test1.txt"), Path.Combine(_testJobWorkingDir, "TEST1.TXT"));
 
-                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobSourceDir);
-                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileMap(_testJobWorkingDir);
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
                 var cachedDirectoryFileMap = sourceDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
-                Assert.False(BaseJobRunner.JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, _mockLogger.Object));
+                Assert.False(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(0, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_FilesCreatedModifiedAndDeleted_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                File.WriteAllText(Path.Combine(_testJobSourceDir, "test1.txt"), "test");
+                File.WriteAllText(Path.Combine(_testJobSourceDir, "test4.txt"), "test");
+                File.Delete(Path.Combine(_testJobSourceDir, "test2.txt"));
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test2.txt' has been deleted."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test4.txt' exists in source directory but not in working directory."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'test1.txt' timestamp differs between source and working directories."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(2, copyToWorkingDirectory.Count);
+                Assert.Equal(1, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_NewSubDirCreated_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                // make a new sub directory
+                string testSubDir = Path.Combine(_testJobSourceDir, "subdir2");
+                Directory.CreateDirectory(testSubDir);
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job subdirectory 'subdir2' exists in source directory but not in working directory."));
+                
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(1, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_NewFileCreatedInNewSubDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                // add some files in a sub directory
+                string testSubDir = Path.Combine(_testJobSourceDir, "subdir2");
+                Directory.CreateDirectory(testSubDir);
+                File.WriteAllText(Path.Combine(testSubDir, "test1.txt"), "test");
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job subdirectory 'subdir2' exists in source directory but not in working directory."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir2\\test1.txt' exists in source directory but not in working directory."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(2, copyToWorkingDirectory.Count);
+                Assert.Equal(0, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_DeleteFilesInSubDirLeavingEmptySubDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                File.Delete(Path.Combine(_testJobSourceDir, "subdir\\test2.txt"));
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test2.txt' has been deleted."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(0, copyToWorkingDirectory.Count);
+                Assert.Equal(1, removeFromWorkingDirectory.Count);
+
+                _mockLogger.VerifyAll();
+            }
+        }
+
+        [Fact]
+        public void JobDirectoryHasChanged_DeleteEntireSubDir_ReturnsTrue()
+        {
+            using (CreateTestJobDirectories())
+            {
+                Directory.Delete(Path.Combine(_testJobSourceDir, "subdir"), true);
+
+                var sourceDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobSourceDir);
+                var workingDirectoryFileMap = BaseJobRunner.GetJobDirectoryFileAndSubDirMap(_testJobWorkingDir);
+                var cachedDirectoryFileMap = workingDirectoryFileMap;
+                HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job subdirectory 'subdir' has been deleted."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test1.txt' has been deleted."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test2.txt' has been deleted."));
+                _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test3.txt' has been deleted."));
+
+                Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
+                Assert.Equal(0, copyToWorkingDirectory.Count);
+                Assert.Equal(4, removeFromWorkingDirectory.Count);
 
                 _mockLogger.VerifyAll();
             }

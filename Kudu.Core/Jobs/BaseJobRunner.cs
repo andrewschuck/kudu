@@ -27,7 +27,7 @@ namespace Kudu.Core.Jobs
         private string _shutdownNotificationFilePath;
         private string _workingDirectory;
         private string _inPlaceWorkingDirectory;
-        private Dictionary<string, FileInfoBase> _cachedSourceDirectoryFileMap;
+        private Dictionary<string, FileSystemInfo> _cachedSourceDirectoryFileMap;
 
         protected BaseJobRunner(string jobName, string jobsTypePath, string basePath, IEnvironment environment,
             IDeploymentSettingsManager settings, ITraceFactory traceFactory, IAnalytics analytics)
@@ -42,6 +42,7 @@ namespace Kudu.Core.Jobs
 
             JobTempPath = Path.Combine(Environment.TempPath, Constants.JobsPath, jobsTypePath, jobName);
             JobDataPath = Path.Combine(Environment.DataPath, Constants.JobsPath, jobsTypePath, jobName);
+            TempJobInstancePath = Path.Combine(JobTempPath, Path.GetRandomFileName());
 
             _externalCommandFactory = new ExternalCommandFactory(Environment, Settings, Environment.RepositoryPath);
         }
@@ -60,6 +61,8 @@ namespace Kudu.Core.Jobs
 
         protected string JobDataPath { get; private set; }
 
+        protected string TempJobInstancePath { get; private set; }
+
         protected string WorkingDirectory
         {
             get { return _inPlaceWorkingDirectory ?? _workingDirectory; }
@@ -73,60 +76,78 @@ namespace Kudu.Core.Jobs
 
         protected JobSettings JobSettings { get; set; }
 
-        internal static bool JobDirectoryHasChanged(
-            Dictionary<string, FileInfoBase> sourceDirectoryFileMap, 
-            Dictionary<string, FileInfoBase> workingDirectoryFileMap, 
-            Dictionary<string, FileInfoBase> cachedSourceDirectoryFileMap,
+        // TODO: If there is a subdirectory being renamed in the source dir,
+        // the directory and all its contents get copied over to working directory
+        // even though only the name has been changed
+        internal static bool JobDirectoryHasChangedFileDiffConveyedInSets(
+            Dictionary<string, FileSystemInfo> sourceDirectoryFileMap,
+            Dictionary<string, FileSystemInfo> workingDirectoryFileMap,
+            Dictionary<string, FileSystemInfo> cachedSourceDirectoryFileMap,
+            HashSet<FileSystemInfo> copyToWorkingDirectory,
+            HashSet<FileSystemInfo> removeFromWorkingDirectory,
             IJobLogger logger)
         {
-            // enumerate all source directory files, and compare against the files
-            // in the working directory (i.e. the cached directory)
-            FileInfoBase foundEntry = null;
+            // enumerate all source directory files and subdirectories, and compare against the files
+            // and subdirectories in the working directory (i.e. the cached directory)
+            FileSystemInfo foundEntry = null;
             foreach (var entry in sourceDirectoryFileMap)
-            {  
+            {
                 if (workingDirectoryFileMap.TryGetValue(entry.Key, out foundEntry))
                 {
-                    if (entry.Value.LastWriteTimeUtc != foundEntry.LastWriteTimeUtc)
+                    if ((foundEntry.Attributes & FileAttributes.Directory) != FileAttributes.Directory && entry.Value.LastWriteTimeUtc != foundEntry.LastWriteTimeUtc)
                     {
                         // source file has changed since we last cached it, or a source
                         // file has been modified in the working directory.
                         logger.LogInformation(string.Format("Job directory change detected: Job file '{0}' timestamp differs between source and working directories.", entry.Key));
-                        return true;
+                        copyToWorkingDirectory.Add(entry.Value);
                     }
                 }
                 else
                 {
-                    // A file exists in source that doesn't exist in our working
-                    // directory. This is either because a file was actually added
-                    // to source, or a file that previously existed in source has been
+                    // A file or subdirectory exists in source that doesn't exist in our working
+                    // directory. This is either because a file/subdirectory was actually added
+                    // to source, or a file/subdirectory that previously existed in source has been
                     // deleted from the working directory.
-                    logger.LogInformation(string.Format("Job directory change detected: Job file '{0}' exists in source directory but not in working directory.", entry.Key));
-                    return true;
+                    if ((entry.Value.Attributes & FileAttributes.Directory) != FileAttributes.Directory)
+                    {
+                        logger.LogInformation(string.Format("Job directory change detected: Job file '{0}' exists in source directory but not in working directory.", entry.Key));
+                    }
+                    else
+                    {
+                        logger.LogInformation(string.Format("Job directory change detected: Job subdirectory '{0}' exists in source directory but not in working directory.", entry.Key));
+                    }
+                    copyToWorkingDirectory.Add(entry.Value);
                 }
             }
 
             // if we've previously run this check in the current process,
-            // look for any file deletions by ensuring all our previously
+            // look for any file or subdirectory deletions by ensuring all our previously
             // cached entries are still present
             foreach (var entry in cachedSourceDirectoryFileMap)
             {
                 if (!sourceDirectoryFileMap.TryGetValue(entry.Key, out foundEntry))
                 {
-                    logger.LogInformation(string.Format("Job directory change detected: Job file '{0}' has been deleted.", entry.Key));
-                    return true;
+                    if ((entry.Value.Attributes & FileAttributes.Directory) != FileAttributes.Directory)
+                    {
+                        logger.LogInformation(string.Format("Job directory change detected: Job file '{0}' has been deleted.", entry.Key));
+                    }
+                    else
+                    {
+                        logger.LogInformation(string.Format("Job directory change detected: Job subdirectory '{0}' has been deleted.", entry.Key));
+                    }
+                    removeFromWorkingDirectory.Add(entry.Value);
                 }
             }
-
-            return false;
+            return copyToWorkingDirectory.Count > 0 || removeFromWorkingDirectory.Count > 0;
         }
 
-        internal static Dictionary<string, FileInfoBase> GetJobDirectoryFileMap(string sourceDirectory)
+        internal static Dictionary<string, FileSystemInfo> GetJobDirectoryFileAndSubDirMap(string sourceDirectory)
         {
-            DirectoryInfoBase jobBinariesDirectory = FileSystemHelpers.DirectoryInfoFromDirectoryName(sourceDirectory);
-            FileInfoBase[] files = jobBinariesDirectory.GetFiles("*.*", SearchOption.AllDirectories);
+            DirectoryInfo jobBinariesDirectory = new DirectoryInfo(sourceDirectory);
+            FileSystemInfo[] filesAndDirs = jobBinariesDirectory.GetFileSystemInfos("*.*", SearchOption.AllDirectories);
 
             int sourceDirectoryPathLength = sourceDirectory.Length + 1;
-            return files.ToDictionary(p => p.FullName.Substring(sourceDirectoryPathLength), q => q, StringComparer.OrdinalIgnoreCase);
+            return filesAndDirs.ToDictionary(p => p.FullName.Substring(sourceDirectoryPathLength), q => q, StringComparer.OrdinalIgnoreCase);
         }
 
         private void CacheJobBinaries(JobBase job, IJobLogger logger)
@@ -141,13 +162,14 @@ namespace Kudu.Core.Jobs
 
             _inPlaceWorkingDirectory = null;
 
-            Dictionary<string, FileInfoBase> sourceDirectoryFileMap = GetJobDirectoryFileMap(JobBinariesPath);
+            HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
+            Dictionary<string, FileSystemInfo> sourceDirectoryFileMap = GetJobDirectoryFileAndSubDirMap(JobBinariesPath);
             if (WorkingDirectory != null)
             {
                 try
                 {
-                    var workingDirectoryFileMap = GetJobDirectoryFileMap(WorkingDirectory);
-                    if (!JobDirectoryHasChanged(sourceDirectoryFileMap, workingDirectoryFileMap, _cachedSourceDirectoryFileMap, logger))
+                    var workingDirectoryFileMap = GetJobDirectoryFileAndSubDirMap(WorkingDirectory);
+                    if (!JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, _cachedSourceDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, logger))
                     {
                         // no changes detected, so skip the cache/copy step below
                         return;
@@ -164,30 +186,33 @@ namespace Kudu.Core.Jobs
 
             SafeKillAllRunningJobInstances(logger);
 
-            if (FileSystemHelpers.DirectoryExists(JobTempPath))
-            {
-                FileSystemHelpers.DeleteDirectorySafe(JobTempPath, ignoreErrors: true);
-            }
-
-            if (FileSystemHelpers.DirectoryExists(JobTempPath))
-            {
-                logger.LogWarning("Failed to delete temporary directory");
-            }
-
             try
             {
                 OperationManager.Attempt(() =>
                 {
-                    var tempJobInstancePath = Path.Combine(JobTempPath, Path.GetRandomFileName());
+                    // if the working directory hasn't been created yet (usually on first run of webjob) then we
+                    // copy all files from source directory to working directory recursively
+                    if (WorkingDirectory != null)
+                    {
+                        FileSystemHelpers.CopyDirectoryFromFileSystemDiff(JobBinariesPath, TempJobInstancePath, copyToWorkingDirectory, removeFromWorkingDirectory);
+                    }
+                    else
+                    {
+                        // Delete temporary directories from previous webjobs instances
+                        if (FileSystemHelpers.DirectoryExists(JobTempPath))
+                        {
+                            FileSystemHelpers.DeleteDirectoryContentsSafe(JobTempPath, ignoreErrors: true);
+                        }
 
-                    FileSystemHelpers.CopyDirectoryRecursive(JobBinariesPath, tempJobInstancePath);
+                        FileSystemHelpers.CopyDirectoryRecursive(JobBinariesPath, TempJobInstancePath);
+                    }
 
                     // this only applies to non-inplace job.   the reason is inplace is 
                     // mostly applicable with nodejs and not reliable with dotnet.  
                     // UpdateAppConfigs only applies to dotnet.
-                    UpdateAppConfigs(tempJobInstancePath, _analytics);
+                    UpdateAppConfigs(TempJobInstancePath, _analytics);
 
-                    _workingDirectory = tempJobInstancePath;
+                    _workingDirectory = TempJobInstancePath;
 
                     // cache the file map snapshot for next time (to aid in detecting
                     // file deletions)
