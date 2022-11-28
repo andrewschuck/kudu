@@ -36,8 +36,6 @@ namespace Kudu.Core.Test.Jobs
                 var cachedDirectoryFileMap = workingDirectoryFileMap;
                 HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
-                //_mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir' timestamp differs between source and working directories."));
-
                 Assert.False(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
                 Assert.Equal(0, copyToWorkingDirectory.Count);
                 Assert.Equal(0, removeFromWorkingDirectory.Count);
@@ -60,7 +58,6 @@ namespace Kudu.Core.Test.Jobs
                 var cachedDirectoryFileMap = workingDirectoryFileMap;
                 HashSet<FileSystemInfo> copyToWorkingDirectory = new HashSet<FileSystemInfo>(), removeFromWorkingDirectory = new HashSet<FileSystemInfo>();
 
-                //_mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir' timestamp differs between source and working directories."));
                 _mockLogger.Setup(p => p.LogInformation("Job directory change detected: Job file 'subdir\\test2.txt' timestamp differs between source and working directories."));
 
                 Assert.True(BaseJobRunner.JobDirectoryHasChangedFileDiffConveyedInSets(sourceDirectoryFileMap, workingDirectoryFileMap, cachedDirectoryFileMap, copyToWorkingDirectory, removeFromWorkingDirectory, _mockLogger.Object));
