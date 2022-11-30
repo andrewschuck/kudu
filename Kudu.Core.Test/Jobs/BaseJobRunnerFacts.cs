@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
-using System.IO.Abstractions;
 using Kudu.Core.Infrastructure;
 using Kudu.Core.Jobs;
 using Kudu.Core.Tracing;

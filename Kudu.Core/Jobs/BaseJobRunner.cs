@@ -149,21 +149,6 @@ namespace Kudu.Core.Jobs
             int sourceDirectoryPathLength = sourceDirectory.Length + 1;
             return filesAndDirs.ToDictionary(p => p.FullName.Substring(sourceDirectoryPathLength), q => q, StringComparer.OrdinalIgnoreCase);
         }
-        
-        /*
-        internal static Dictionary<string, FileSystemInfoBase> GetJobDirectoryFileAndSubDirMap2(string sourceDirectory)
-        {
-            DirectoryInfoBase jobBinariesDirectory = FileSystemHelpers.DirectoryInfoFromDirectoryName(sourceDirectory);
-            FileInfoBase[] files = jobBinariesDirectory.GetFiles("*.*", SearchOption.AllDirectories);
-
-            DirectoryInfoBase[] dirs = jobBinariesDirectory.GetDirectories("*.*", SearchOption.AllDirectories);
-
-            FileSystemInfoBase[] filesAndDirs = files.Cast<FileSystemInfoBase>().Concat(dirs).ToArray();
-
-            int sourceDirectoryPathLength = sourceDirectory.Length + 1;
-            return filesAndDirs.ToDictionary(p => p.FullName.Substring(sourceDirectoryPathLength), q => q, StringComparer.OrdinalIgnoreCase);
-        }
-        */
 
         private void CacheJobBinaries(JobBase job, IJobLogger logger)
         {
