@@ -302,10 +302,9 @@ namespace Kudu.Core.Infrastructure
                 string entryToRemoveSubDir = Path.GetDirectoryName(entryToRemove.FullName).Replace(sourceDirPath, "").TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 
                 string completeDestinationPath = Path.Combine(destinationDirPath, entryToRemoveSubDir, entryToRemove.Name);
-                bool entryIsDirectory = (entryToRemove.Attributes & FileAttributes.Directory) == FileAttributes.Directory;
 
                 // if the new entry is a directory, delete the directory in the working directory
-                if (entryIsDirectory)
+                if (DirectoryExists(completeDestinationPath))
                 {
                     DeleteDirectorySafe(completeDestinationPath);
                 }
