@@ -76,9 +76,11 @@ namespace Kudu.Core.Jobs
 
         protected JobSettings JobSettings { get; set; }
 
-        // TODO: If there is a subdirectory being renamed in the source dir,
-        // the directory and all its contents get copied over to working directory
-        // even though only the name has been changed
+        // Detects if the job directory has changed since the last time it was realigned with the
+        // source directory. It adds the files/directories which need to be added and removed from the working
+        // directory in 2 HashSets. These HashSets will be used in the CopyDirectoryFromFileSystemDiff method of
+        // the FileSystemHelpers class to perform smart copying instead of recursively copying an entire directory
+        // every time a change is detected
         internal static bool JobDirectoryHasChangedFileDiffConveyedInSets(
             Dictionary<string, FileSystemInfo> sourceDirectoryFileMap,
             Dictionary<string, FileSystemInfo> workingDirectoryFileMap,
